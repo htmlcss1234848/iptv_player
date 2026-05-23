@@ -1,9 +1,12 @@
-name: Build Debug APK
+name: Build Release APK
 
 on:
   push:
     branches: [ main, master ]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -13,33 +16,31 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: temurin
+          java-version: 17
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.32.2'
-          channel: 'stable'
+          flutter-version: 3.32.2
+          channel: stable
           cache: true
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Build Split APKs
-        run: flutter build apk --debug --split-per-abi
+      - name: Build ARM64 Release APK
+        run: flutter build apk --release --target-platform android-arm64
 
-      - name: Upload arm64-v8a (Modern phones)
-        uses: actions/upload-artifact@v4
-        with:
-          name: iptv-player-arm64-v8a
-          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
+      - name: Rename APK
+        run: |
+          mv build/app/outputs/flutter-apk/app-release.apk iptv-player-arm64-v8a.apk
 
-      - name: Upload armeabi-v7a (Old phones)
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: iptv-player-armeabi-v7a
-          path: build/app/outputs/flutter-apk/app-armeabi-v7a-debug.apk
+          tag_name: release-${{ github.run_number }}
+          files: iptv-player-arm64-v8a.apk
