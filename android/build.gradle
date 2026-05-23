@@ -1,15 +1,20 @@
-def localProperties = new Properties()
-def localPropertiesFile = rootProject.file('local.properties')
-
-if (localPropertiesFile.exists()) {
-    localPropertiesFile.withReader('UTF-8') { reader ->
-        localProperties.load(reader)
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
     }
 }
 
-def flutterRoot = localProperties.getProperty('flutter.sdk')
+rootProject.buildDir = '../build'
 
-apply plugin: 'com.android.application'
-apply plugin: 'kotlin-android'
+subprojects {
+    project.buildDir = "${rootProject.buildDir}/${project.name}"
+}
 
-apply from: "$flutterRoot/packages/flutter_tools/gradle/flutter.gradle"
+subprojects {
+    project.evaluationDependsOn(':app')
+}
+
+tasks.register("clean", Delete) {
+    delete rootProject.buildDir
+}
