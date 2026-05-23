@@ -3,93 +3,43 @@ name: Build Debug APK
 on:
   push:
     branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
-permissions:
-  contents: write
 
 jobs:
   build:
-    name: Build APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
           distribution: 'temurin'
+          java-version: '17'
 
-      - name: Set up Flutter
+      - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.32.2'
           channel: 'stable'
           cache: true
 
-      - name: Generate local.properties
-        run: |
-          echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
-          echo "sdk.dir=$ANDROID_SDK_ROOT" >> android/local.properties
-
-      - name: Ensure gradlew executable
-        run: chmod +x android/gradlew
-
-      - name: Install Flutter dependencies
+      - name: Get dependencies
         run: flutter pub get
 
-      - name: Build debug APK
-        run: flutter build apk --debug
+      - name: Build Split APKs
+        run: flutter build apk --debug --split-per-abi
 
-      - name: Upload APK artifact
+      - name: Upload arm64-v8a (Modern phones)
         uses: actions/upload-artifact@v4
         with:
-          name: iptv-player-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
-          retention-days: 30
+          name: iptv-player-arm64-v8a
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
 
-      - name: Get version
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        id: version
-        run: |
-          VERSION=$(grep '^version:' pubspec.yaml | sed 's/version: //' | tr -d ' ')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
-      - name: Delete old release if exists
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        run: |
-          gh release delete "v${{ steps.version.outputs.version }}" --yes 2>/dev/null || true
-          git push --delete origin "v${{ steps.version.outputs.version }}" 2>/dev/null || true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create Release with APK
-        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
-        uses: softprops/action-gh-release@v2
+      - name: Upload armeabi-v7a (Old phones)
+        uses: actions/upload-artifact@v4
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: IPTV Player v${{ steps.version.outputs.version }}
-          body: |
-            ## IPTV Player Debug Build
-
-            ### Features
-            - ✅ Native ExoPlayer (Media3) via Platform Channel
-            - ✅ HLS (.m3u8), TS, Xtream Codes, Direct HTTP stream
-            - ✅ Debug overlay — bitrate, codec, fps, dropped frames
-            - ✅ Custom headers support
-            - ✅ Auto retry on failure (3x)
-            - ✅ Recent URLs history
-
-            ### Install
-            1. Download `app-debug.apk`
-            2. Enable unknown sources
-            3. Install APK
-          files: build/app/outputs/flutter-apk/app-debug.apk
-          draft: false
-          prerelease: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: iptv-player-armeabi-v7a
+          path: build/app/outputs/flutter-apk/app-armeabi-v7a-debug.apk
