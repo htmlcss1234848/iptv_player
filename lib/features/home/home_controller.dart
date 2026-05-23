@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/utils/url_parser.dart';
@@ -8,7 +9,6 @@ import '../player/player_screen.dart';
 class HomeController extends GetxController {
   final urlController = TextEditingController();
   final RxList<String> recentUrls = <String>[].obs;
-  final RxBool isValidUrl = false.obs;
 
   static const _prefsKey = 'recent_urls';
   static const _maxRecent = 10;
@@ -17,19 +17,12 @@ class HomeController extends GetxController {
   void onInit() {
     super.onInit();
     _loadRecentUrls();
-    urlController.addListener(_onUrlChanged);
   }
 
   @override
   void onClose() {
     urlController.dispose();
     super.onClose();
-  }
-
-  void _onUrlChanged() {
-    final url = urlController.text.trim();
-    isValidUrl.value = url.isNotEmpty &&
-        (url.startsWith('http://') || url.startsWith('https://'));
   }
 
   void onPlay() {
@@ -49,36 +42,17 @@ class HomeController extends GetxController {
     _persistRecentUrls();
   }
 
-  void clearInput() {
-    urlController.clear();
-  }
+  void clearInput() => urlController.clear();
 
-  void pasteFromClipboard() async {
-    // Gets text from clipboard via Flutter
-    final data = await _getClipboardText();
-    if (data != null && data.isNotEmpty) {
-      urlController.text = data;
-    }
-  }
-
-  Future<String?> _getClipboardText() async {
-    // Using Flutter's Clipboard
-    final value = await _clipboardRead();
-    return value;
-  }
-
-  Future<String?> _clipboardRead() async {
-    try {
-      final data = await ServicesBinding.instance.keyboard.toString();
-      return null; // placeholder - actual impl via Clipboard.getData
-    } catch (_) {
-      return null;
+  Future<void> pasteFromClipboard() async {
+    final data = await Clipboard.getData('text/plain');
+    if (data?.text != null && data!.text!.isNotEmpty) {
+      urlController.text = data.text!;
     }
   }
 
   void _navigateToPlayer(String url) {
     final streamUrl = UrlParser.parse(url);
-    // Add default headers if needed
     final headers = UrlParser.defaultHeadersFor(url);
     final finalStream = headers.isNotEmpty
         ? streamUrl.copyWith(headers: headers)
@@ -91,7 +65,7 @@ class HomeController extends GetxController {
   }
 
   Future<void> _saveRecentUrl(String url) async {
-    recentUrls.remove(url); // remove duplicate
+    recentUrls.remove(url);
     recentUrls.insert(0, url);
     if (recentUrls.length > _maxRecent) {
       recentUrls.removeRange(_maxRecent, recentUrls.length);
