@@ -232,7 +232,10 @@ class ExoPlayerManager(
         )
 
         val p = player ?: return
-        val mediaItem = StreamUrlResolver.buildMediaItemWithMime(hlsStream)
+        val mediaItem = androidx.media3.common.MediaItem.Builder()
+            .setUri(hlsStream.url)
+            .setMimeType(androidx.media3.common.MimeTypes.APPLICATION_M3U8)
+            .build()
         val mediaSource = DefaultMediaSourceFactory(
             buildDataSourceFactory(hlsStream.headers)
         ).createMediaSource(mediaItem)
