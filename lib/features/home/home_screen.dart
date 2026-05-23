@@ -28,7 +28,7 @@ class HomeScreen extends StatelessWidget {
                     onClear: controller.clearInput,
                   ),
                   const SizedBox(height: 8),
-                  _StreamTypeLegend(),
+                  const _StreamTypeLegend(),
                   const SizedBox(height: 8),
                   Obx(() => RecentUrlsList(
                         urls: controller.recentUrls,
@@ -99,19 +99,22 @@ class _Header extends StatelessWidget {
 }
 
 class _StreamTypeLegend extends StatelessWidget {
-  final _types = const [
-    ('HLS', Color(0xFF1DE9B6), '.m3u8'),
-    ('TS', Color(0xFFFFAB40), '.ts'),
-    ('XC', Color(0xFF7C4DFF), 'Xtream'),
-    ('HTTP', Color(0xFF00E5FF), 'Direct'),
-  ];
+  const _StreamTypeLegend();
 
   @override
   Widget build(BuildContext context) {
+    const types = [
+      ('HLS', Color(0xFF1DE9B6), '.m3u8'),
+      ('TS', Color(0xFFFFAB40), '.ts'),
+      ('XC', Color(0xFF7C4DFF), 'Xtream'),
+      ('HTTP', Color(0xFF00E5FF), 'Direct'),
+      ('AUTO', Color(0xFFFFFFFF), 'Sniff'),
+    ];
+
     return Wrap(
       spacing: 8,
       runSpacing: 8,
-      children: _types
+      children: types
           .map((t) => _LegendChip(label: t.$1, color: t.$2, desc: t.$3))
           .toList(),
     );
