@@ -34,33 +34,17 @@ jobs:
           echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
           echo "sdk.dir=$ANDROID_SDK_ROOT" >> android/local.properties
 
-      - name: Find and copy gradlew from Flutter SDK
+      - name: Setup gradlew and gradle wrapper
         run: |
-          echo "Searching for gradlew in Flutter SDK..."
-          find $FLUTTER_ROOT -name "gradlew" -type f 2>/dev/null | head -5
-          
-          GRADLEW_PATH=$(find $FLUTTER_ROOT -name "gradlew" -not -path "*/bin/*" -type f 2>/dev/null | head -1)
-          
-          if [ -n "$GRADLEW_PATH" ]; then
-            echo "Found: $GRADLEW_PATH"
-            cp "$GRADLEW_PATH" android/gradlew
-            chmod +x android/gradlew
-            
-            # gradle-wrapper.jar ও copy করো same folder থেকে
-            JAR_PATH=$(find $FLUTTER_ROOT -name "gradle-wrapper.jar" -type f 2>/dev/null | head -1)
-            if [ -n "$JAR_PATH" ]; then
-              echo "Found jar: $JAR_PATH"
-              cp "$JAR_PATH" android/gradle/wrapper/gradle-wrapper.jar
-            fi
-          else
-            echo "Not found in SDK, creating fresh Flutter project to get gradlew..."
-            flutter create /tmp/tmpapp --platforms android
-            cp /tmp/tmpapp/android/gradlew android/gradlew
-            chmod +x android/gradlew
-            cp /tmp/tmpapp/android/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
-          fi
-          
-          echo "gradlew ready: $(head -1 android/gradlew)"
+          # gradlew — Flutter cache থেকে
+          cp $FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/gradlew android/gradlew
+          chmod +x android/gradlew
+
+          # gradle/wrapper dir তৈরি করো এবং jar copy করো
+          mkdir -p android/gradle/wrapper
+          cp $FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
+
+          echo "Done: $(head -1 android/gradlew)"
 
       - name: Install Flutter dependencies
         run: flutter pub get
