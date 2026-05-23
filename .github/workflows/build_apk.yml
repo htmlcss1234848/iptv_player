@@ -34,25 +34,11 @@ jobs:
           echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
           echo "sdk.dir=$ANDROID_SDK_ROOT" >> android/local.properties
 
-      - name: Fix gradlew — copy from Flutter SDK
+      - name: Get gradlew from Flutter SDK
         run: |
-          # Flutter SDK এর নিজের gradlew copy করো
-          cp $FLUTTER_ROOT/packages/flutter_tools/templates/app_shared/android.tmpl/gradlew android/gradlew 2>/dev/null || \
-          # fallback: GitHub থেকে real gradlew download করো
-          curl -fsSL https://raw.githubusercontent.com/gradle/gradle/v8.3.0/gradle/wrapper/gradle-wrapper.sh -o android/gradlew || \
-          # fallback 2: flutter create থেকে নাও
-          (cd /tmp && flutter create _tmp_app --platforms android -q && cp _tmp_app/android/gradlew $GITHUB_WORKSPACE/android/gradlew)
+          cp $FLUTTER_ROOT/packages/flutter_tools/templates/app_shared/android.tmpl/gradlew android/gradlew
           chmod +x android/gradlew
-          echo "gradlew first line: $(head -1 android/gradlew)"
-
-      - name: Copy gradle wrapper jar if missing
-        run: |
-          if [ ! -f android/gradle/wrapper/gradle-wrapper.jar ]; then
-            mkdir -p android/gradle/wrapper
-            cd /tmp && flutter create _tmp_app2 --platforms android -q
-            cp /tmp/_tmp_app2/android/gradle/wrapper/gradle-wrapper.jar $GITHUB_WORKSPACE/android/gradle/wrapper/
-            echo "Copied gradle-wrapper.jar"
-          fi
+          cp $FLUTTER_ROOT/packages/flutter_tools/templates/app_shared/android.tmpl/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
 
       - name: Install Flutter dependencies
         run: flutter pub get
