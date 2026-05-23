@@ -9,10 +9,7 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import androidx.media3.exoplayer.source.MediaSource
-import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.exoplayer.upstream.DefaultBandwidthMeter
 import androidx.media3.ui.PlayerView
 import com.iptvplayer.exocore.player.debug.DebugInfoCollector
@@ -24,7 +21,6 @@ import com.iptvplayer.exocore.player.track.TrackSelector
 import com.iptvplayer.exocore.utils.ResolvedStream
 import com.iptvplayer.exocore.utils.StreamType
 import com.iptvplayer.exocore.utils.StreamUrlResolver
-import java.util.concurrent.Executors
 
 class ExoPlayerManager(
     private val context: Context,
@@ -34,8 +30,6 @@ class ExoPlayerManager(
 ) {
     private var player: ExoPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
-    // Background thread for network sniffing
-    private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private val stateManager = PlayerStateManager()
     private val headerManager = HttpHeaderManager()
@@ -65,22 +59,13 @@ class ExoPlayerManager(
     // ─── Public API ───────────────────────────────────────────────────────────
 
     fun play(url: String, typeHint: String, headers: Map<String, String>) {
-        // State: initializing immediately
         mainHandler.post {
             stateManager.update { copy(state = ExoPlayerState.INITIALIZING) }
             onStateChange(stateManager.current)
             initOrResetPlayer()
-        }
-
-        // Sniff on IO thread (network call)
-        ioExecutor.execute {
-            val stream = StreamUrlResolver.resolve(url, typeHint, headers)
+            val stream = ResolvedStream(url = url, headers = headers)
             currentStream = stream
-
-            // Load on main thread
-            mainHandler.post {
-                loadStream(stream)
-            }
+            loadStream(stream)
         }
     }
 
@@ -98,20 +83,12 @@ class ExoPlayerManager(
 
     fun retry() {
         mainHandler.post {
+            val stream = currentStream ?: return@post
             stateManager.update { copy(state = ExoPlayerState.INITIALIZING) }
             onStateChange(stateManager.current)
-        }
-        val stream = currentStream
-        if (stream != null) {
-            ioExecutor.execute {
-                val fresh = StreamUrlResolver.resolve(stream.url, "direct", stream.headers)
-                currentStream = fresh
-                mainHandler.post {
-                    player?.stop()
-                    player?.clearMediaItems()
-                    loadStream(fresh)
-                }
-            }
+            player?.stop()
+            player?.clearMediaItems()
+            loadStream(stream)
         }
     }
 
@@ -153,9 +130,7 @@ class ExoPlayerManager(
             debugCollector.reset()
             dropMonitor.reset()
         }
-        ioExecutor.shutdown()
     }
-
     // ─── Private ──────────────────────────────────────────────────────────────
 
     private fun initOrResetPlayer() {
@@ -221,20 +196,12 @@ class ExoPlayerManager(
     private fun loadStream(stream: ResolvedStream) {
         val p = player ?: return
         val mediaItem = StreamUrlResolver.buildMediaItem(stream)
-
         val dataSourceFactory = buildDataSourceFactory(stream.headers)
 
-        val mediaSource: MediaSource = when (stream.type) {
-            StreamType.HLS, StreamType.XTREAM_HLS ->
-                HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
-
-            StreamType.TS, StreamType.XTREAM_TS ->
-                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
-
-            // DIRECT, XTREAM, UNKNOWN — ExoPlayer নিজে sniff করবে
-            else ->
-                DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
-        }
+        // DefaultMediaSourceFactory — ExoPlayer নিজেই HLS/TS/DASH/MP4
+        // সব detect করে। mimeType null হলে content sniff করে।
+        val mediaSource = DefaultMediaSourceFactory(dataSourceFactory)
+            .createMediaSource(mediaItem)
 
         p.setMediaSource(mediaSource)
         p.prepare()
