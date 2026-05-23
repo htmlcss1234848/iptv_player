@@ -5,13 +5,11 @@ import android.os.Handler
 import android.os.Looper
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
-import androidx.media3.common.MediaItem
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.hls.HlsMediaSource
-import androidx.media3.exoplayer.smoothstreaming.SsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.ProgressiveMediaSource
@@ -26,6 +24,7 @@ import com.iptvplayer.exocore.player.track.TrackSelector
 import com.iptvplayer.exocore.utils.ResolvedStream
 import com.iptvplayer.exocore.utils.StreamType
 import com.iptvplayer.exocore.utils.StreamUrlResolver
+import java.util.concurrent.Executors
 
 class ExoPlayerManager(
     private val context: Context,
@@ -35,6 +34,8 @@ class ExoPlayerManager(
 ) {
     private var player: ExoPlayer? = null
     private val mainHandler = Handler(Looper.getMainLooper())
+    // Background thread for network sniffing
+    private val ioExecutor = Executors.newSingleThreadExecutor()
 
     private val stateManager = PlayerStateManager()
     private val headerManager = HttpHeaderManager()
@@ -46,29 +47,46 @@ class ExoPlayerManager(
     private var trackSelectorWrapper: TrackSelector? = null
     private var currentStream: ResolvedStream? = null
 
-    // Debug polling timer
     private var debugRunnable: Runnable? = null
     private val DEBUG_INTERVAL_MS = 1000L
 
+    private val retryManager = RetryManager(
+        maxRetries = 3,
+        retryDelayMs = 3000L,
+        onRetry = { _ ->
+            currentStream?.let { stream ->
+                player?.stop()
+                player?.clearMediaItems()
+                loadStream(stream)
+            }
+        }
+    )
+
     // ─── Public API ───────────────────────────────────────────────────────────
 
-    fun play(
-        url: String,
-        typeHint: String,
-        headers: Map<String, String>,
-    ) {
+    fun play(url: String, typeHint: String, headers: Map<String, String>) {
+        // State: initializing immediately
         mainHandler.post {
+            stateManager.update { copy(state = ExoPlayerState.INITIALIZING) }
+            onStateChange(stateManager.current)
+            initOrResetPlayer()
+        }
+
+        // Sniff on IO thread (network call)
+        ioExecutor.execute {
             val stream = StreamUrlResolver.resolve(url, typeHint, headers)
             currentStream = stream
-            headerManager.updateHeaders(headers)
-            initOrResetPlayer()
-            loadStream(stream)
+
+            // Load on main thread
+            mainHandler.post {
+                loadStream(stream)
+            }
         }
     }
 
-    fun pause() = mainHandler.post { player?.pause() }
+    fun pause()  = mainHandler.post { player?.pause() }
     fun resume() = mainHandler.post { player?.play() }
-    fun stop() = mainHandler.post { player?.stop() }
+    fun stop()   = mainHandler.post { player?.stop() }
 
     fun seekTo(positionMs: Long) = mainHandler.post {
         player?.seekTo(positionMs)
@@ -78,11 +96,22 @@ class ExoPlayerManager(
         player?.volume = volume
     }
 
-    fun retry() = mainHandler.post {
-        currentStream?.let { stream ->
-            player?.stop()
-            player?.clearMediaItems()
-            loadStream(stream)
+    fun retry() {
+        mainHandler.post {
+            stateManager.update { copy(state = ExoPlayerState.INITIALIZING) }
+            onStateChange(stateManager.current)
+        }
+        val stream = currentStream
+        if (stream != null) {
+            ioExecutor.execute {
+                val fresh = StreamUrlResolver.resolve(stream.url, "direct", stream.headers)
+                currentStream = fresh
+                mainHandler.post {
+                    player?.stop()
+                    player?.clearMediaItems()
+                    loadStream(fresh)
+                }
+            }
         }
     }
 
@@ -90,15 +119,17 @@ class ExoPlayerManager(
         val p = player ?: return stateManager.current.toMap()
         return stateManager.update {
             copy(
-                positionMs = p.currentPosition,
-                durationMs = p.duration.coerceAtLeast(0L),
+                positionMs   = p.currentPosition,
+                durationMs   = p.duration.coerceAtLeast(0L),
                 bufferPercent = p.bufferedPercentage,
             )
         }.toMap()
     }
 
     fun getDebugMap(): Map<String, Any> {
-        val p = player ?: return debugCollector.collect(buildDummyPlayer())
+        val p = player ?: return DebugInfoCollector(BandwidthMeterWrapper()).collect(
+            ExoPlayer.Builder(context).build().also { it.release() }
+        )
         return debugCollector.collect(p)
     }
 
@@ -113,6 +144,7 @@ class ExoPlayerManager(
     fun dispose() {
         mainHandler.post {
             stopDebugPolling()
+            retryManager.destroy()
             eventListener?.let { player?.removeListener(it) }
             player?.removeAnalyticsListener(debugCollector.analyticsListener)
             player?.release()
@@ -121,18 +153,17 @@ class ExoPlayerManager(
             debugCollector.reset()
             dropMonitor.reset()
         }
+        ioExecutor.shutdown()
     }
 
-    // ─── Private: Player init ─────────────────────────────────────────────────
+    // ─── Private ──────────────────────────────────────────────────────────────
 
     private fun initOrResetPlayer() {
-        if (player != null) {
-            stopDebugPolling()
-            eventListener?.let { player?.removeListener(it) }
-            player?.removeAnalyticsListener(debugCollector.analyticsListener)
-            player?.release()
-            player = null
-        }
+        stopDebugPolling()
+        eventListener?.let { player?.removeListener(it) }
+        player?.removeAnalyticsListener(debugCollector.analyticsListener)
+        player?.release()
+        player = null
         stateManager.reset()
         debugCollector.reset()
         dropMonitor.reset()
@@ -143,18 +174,13 @@ class ExoPlayerManager(
         val bandwidthMeter = DefaultBandwidthMeter.Builder(context).build()
         bandwidthMeterWrapper.attach(bandwidthMeter)
 
-        val okHttpClient = headerManager.buildOkHttpClient()
-        val okHttpDataSourceFactory = OkHttpDataSource.Factory(okHttpClient)
-        val dataSourceFactory = DefaultDataSource.Factory(context, okHttpDataSourceFactory)
-
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                /* minBufferMs= */        5_000,
-                /* maxBufferMs= */        30_000,
-                /* bufferForPlaybackMs= */ 2_000,
-                /* bufferForPlaybackAfterRebufferMs= */ 3_000
-            )
+            .setBufferDurationsMs(5_000, 30_000, 2_000, 3_000)
             .build()
+
+        val okHttpClient = headerManager.buildOkHttpClient()
+        val okHttpFactory = OkHttpDataSource.Factory(okHttpClient)
+        val dataSourceFactory = DefaultDataSource.Factory(context, okHttpFactory)
 
         val newPlayer = ExoPlayer.Builder(context)
             .setBandwidthMeter(bandwidthMeter)
@@ -162,18 +188,16 @@ class ExoPlayerManager(
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             .build()
             .also { p ->
-                // Audio focus
                 p.setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(C.USAGE_MEDIA)
                         .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
                         .build(),
-                    /* handleAudioFocus= */ true
+                    true
                 )
                 p.playWhenReady = true
             }
 
-        // Attach listeners
         val listener = PlayerEventListener(
             stateManager = stateManager,
             onStateChange = { state ->
@@ -198,56 +222,36 @@ class ExoPlayerManager(
         val p = player ?: return
         val mediaItem = StreamUrlResolver.buildMediaItem(stream)
 
+        val dataSourceFactory = buildDataSourceFactory(stream.headers)
+
         val mediaSource: MediaSource = when (stream.type) {
-            StreamType.HLS, StreamType.XTREAM_HLS -> {
-                val dataSourceFactory = buildDataSourceFactory(stream.headers)
-                HlsMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
-            }
-            StreamType.TS, StreamType.XTREAM_TS -> {
-                val dataSourceFactory = buildDataSourceFactory(stream.headers)
-                ProgressiveMediaSource.Factory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
-            }
-            StreamType.XTREAM, StreamType.DIRECT -> {
-                // Let ExoPlayer sniff the format automatically
-                val dataSourceFactory = buildDataSourceFactory(stream.headers)
-                DefaultMediaSourceFactory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
-            }
-            StreamType.UNKNOWN -> {
-                val dataSourceFactory = buildDataSourceFactory(stream.headers)
-                DefaultMediaSourceFactory(dataSourceFactory)
-                    .createMediaSource(mediaItem)
-            }
+            StreamType.HLS, StreamType.XTREAM_HLS ->
+                HlsMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+
+            StreamType.TS, StreamType.XTREAM_TS ->
+                ProgressiveMediaSource.Factory(dataSourceFactory).createMediaSource(mediaItem)
+
+            // DIRECT, XTREAM, UNKNOWN — ExoPlayer নিজে sniff করবে
+            else ->
+                DefaultMediaSourceFactory(dataSourceFactory).createMediaSource(mediaItem)
         }
 
         p.setMediaSource(mediaSource)
         p.prepare()
-
-        stateManager.update { copy(state = ExoPlayerState.INITIALIZING) }
-        onStateChange(stateManager.current)
     }
 
-    private fun buildDataSourceFactory(
-        headers: Map<String, String>
-    ): DefaultDataSource.Factory {
+    private fun buildDataSourceFactory(headers: Map<String, String>): DefaultDataSource.Factory {
         val hm = HttpHeaderManager(headers)
-        val okHttpClient = hm.buildOkHttpClient()
-        val okHttpFactory = OkHttpDataSource.Factory(okHttpClient)
-        return DefaultDataSource.Factory(context, okHttpFactory)
+        val okHttp = OkHttpDataSource.Factory(hm.buildOkHttpClient())
+        return DefaultDataSource.Factory(context, okHttp)
     }
-
-    // ─── Debug polling ────────────────────────────────────────────────────────
 
     private fun startDebugPolling() {
         stopDebugPolling()
         debugRunnable = object : Runnable {
             override fun run() {
                 val p = player ?: return
-                if (p.isPlaying || p.isLoading) {
-                    onDebugInfo(debugCollector.collect(p))
-                }
+                if (p.isPlaying || p.isLoading) onDebugInfo(debugCollector.collect(p))
                 mainHandler.postDelayed(this, DEBUG_INTERVAL_MS)
             }
         }
@@ -257,25 +261,5 @@ class ExoPlayerManager(
     private fun stopDebugPolling() {
         debugRunnable?.let { mainHandler.removeCallbacks(it) }
         debugRunnable = null
-    }
-
-    // ─── Retry ────────────────────────────────────────────────────────────────
-
-    private val retryManager = RetryManager(
-        maxRetries = 3,
-        retryDelayMs = 3000L,
-        onRetry = { attempt ->
-            currentStream?.let { stream ->
-                player?.stop()
-                player?.clearMediaItems()
-                loadStream(stream)
-            }
-        }
-    )
-
-    // ─── Dummy player for safe debug calls ───────────────────────────────────
-
-    private fun buildDummyPlayer(): ExoPlayer {
-        return player ?: ExoPlayer.Builder(context).build().also { player = it }
     }
 }
