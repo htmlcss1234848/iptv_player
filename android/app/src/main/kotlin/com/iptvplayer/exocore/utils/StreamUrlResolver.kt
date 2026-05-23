@@ -91,10 +91,3 @@ object StreamUrlResolver {
         MediaItem.Builder().setUri(stream.url).build()
 }
 
-// Extension function — Force HLS retry এ use হয়
-fun StreamUrlResolver.buildMediaItemWithMime(stream: ResolvedStream): androidx.media3.common.MediaItem {
-    return androidx.media3.common.MediaItem.Builder()
-        .setUri(stream.url)
-        .apply { if (stream.mimeType != null) setMimeType(stream.mimeType) }
-        .build()
-}
