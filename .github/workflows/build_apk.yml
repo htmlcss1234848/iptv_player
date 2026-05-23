@@ -34,17 +34,8 @@ jobs:
           echo "flutter.sdk=$FLUTTER_ROOT" > android/local.properties
           echo "sdk.dir=$ANDROID_SDK_ROOT" >> android/local.properties
 
-      - name: Setup gradlew and gradle wrapper
-        run: |
-          # gradlew — Flutter cache থেকে
-          cp $FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/gradlew android/gradlew
-          chmod +x android/gradlew
-
-          # gradle/wrapper dir তৈরি করো এবং jar copy করো
-          mkdir -p android/gradle/wrapper
-          cp $FLUTTER_ROOT/bin/cache/artifacts/gradle_wrapper/gradle-wrapper.jar android/gradle/wrapper/gradle-wrapper.jar
-
-          echo "Done: $(head -1 android/gradlew)"
+      - name: Ensure gradlew executable
+        run: chmod +x android/gradlew
 
       - name: Install Flutter dependencies
         run: flutter pub get
@@ -92,9 +83,9 @@ jobs:
             - ✅ Recent URLs history
 
             ### Install
-            1. `app-debug.apk` download করো
-            2. Settings → Install from unknown sources → Enable
-            3. Install করো
+            1. Download `app-debug.apk`
+            2. Enable unknown sources
+            3. Install APK
           files: build/app/outputs/flutter-apk/app-debug.apk
           draft: false
           prerelease: true
